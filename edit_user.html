@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8">
+  <title>تعديل المستخدم</title>
+  <style>
+    body {
+      font-family: 'Arial', sans-serif;
+      background-color: #f4f4f9;
+      padding: 30px;
+      color: #333;
+    }
+
+    h2 {
+      text-align: center;
+      color: #2c3e50;
+      margin-bottom: 30px;
+    }
+
+    form {
+      max-width: 500px;
+      margin: 0 auto;
+      background-color: #ffffff;
+      padding: 25px;
+      border-radius: 10px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    }
+
+    label {
+      display: block;
+      margin-bottom: 15px;
+      font-weight: bold;
+    }
+
+    input[type="text"],
+    input[type="email"],
+    input[type="datetime-local"] {
+      width: 100%;
+      padding: 10px;
+      font-size: 15px;
+      margin-top: 5px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      box-sizing: border-box;
+    }
+
+    input[type="checkbox"] {
+      margin-right: 8px;
+      transform: scale(1.2);
+    }
+
+    button {
+      width: 100%;
+      padding: 12px;
+      background-color: #007bff;
+      color: white;
+      font-size: 16px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+    }
+
+    button:hover {
+      background-color: #0056b3;
+    }
+  </style>
+</head>
+<body>
+  <h2>تعديل بيانات المستخدم</h2>
+  <form id="editForm">
+    <label>الاسم الكامل:
+      <input type="text" id="fullname" required>
+    </label>
+
+    <label>البريد الإلكتروني:
+      <input type="email" id="email" required>
+    </label>
+
+    <label>اسم المستخدم:
+      <input type="text" id="username" required>
+    </label>
+
+    <label>حظر حتى (اختياري):
+      <input type="datetime-local" id="banned_until">
+    </label>
+
+    <label>
+      <input type="checkbox" id="permanently_banned"> حظر دائم
+    </label>
+
+    <button type="submit">💾 حفظ التعديلات</button>
+  </form>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const userId = params.get("id");
+
+    fetch(`http://localhost:5000/users/${userId}`)
+      .then(res => res.json())
+      .then(user => {
+        document.getElementById("fullname").value = user.fullname;
+        document.getElementById("email").value = user.email;
+        document.getElementById("username").value = user.username;
+        if (user.banned_until) {
+          document.getElementById("banned_until").value = user.banned_until.replace(" ", "T");
+        }
+        document.getElementById("permanently_banned").checked = !!user.permanently_banned;
+      });
+
+    document.getElementById("editForm").addEventListener("submit", function(e) {
+      e.preventDefault();
+
+      const bannedUntilValue = document.getElementById("banned_until").value || null;
+
+      fetch(`http://localhost:5000/users/${userId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullname: document.getElementById("fullname").value,
+          email: document.getElementById("email").value,
+          username: document.getElementById("username").value,
+          banned_until: bannedUntilValue,
+          permanently_banned: document.getElementById("permanently_banned").checked ? 1 : 0
+        })
+      }).then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            alert("✅ تم تحديث بيانات المستخدم بنجاح");
+            window.location.href = "users.html";
+          } else {
+            alert("❌ حدث خطأ أثناء التحديث");
+          }
+        });
+    });
+  </script>
+</body>
+</html>

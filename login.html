@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <title>تسجيل الدخول</title>
+  <style>
+    :root {
+      --primary-color: #128c7e;
+      --primary-dark: #075e54;
+      --primary-light: #25d366;
+      --user-message: #dcf8c6;
+      --bot-message: #ffffff;
+      --background: #f0f2f5;
+      --text-primary: #3c4043;
+      --text-secondary: #5f6368;
+      --border-color: #dadce0;
+      --shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: 'Tajawal', sans-serif;
+    }
+
+    body {
+      background: var(--background);
+      color: var(--text-primary);
+      direction: rtl;
+      height: 100vh;
+      overflow: auto;
+    }
+
+    #app {
+      max-width: 500px;
+      margin: 50px auto;
+      background: white;
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 30px;
+      text-align: center;
+    }
+
+    .ai-icon {
+      font-size: 50px;
+      margin-bottom: 15px;
+      color: var(--primary-dark);
+    }
+
+    h2 {
+      margin-bottom: 25px;
+      color: var(--primary-dark);
+    }
+
+    form {
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+      text-align: right;
+    }
+
+    label {
+      font-weight: bold;
+      color: var(--text-secondary);
+    }
+
+    input {
+      padding: 10px;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      font-size: 16px;
+    }
+
+    button {
+      background: var(--primary-color);
+      color: white;
+      border: none;
+      padding: 12px;
+      font-size: 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.3s ease;
+    }
+
+    button:hover {
+      background: var(--primary-dark);
+    }
+
+    p {
+      text-align: center;
+      margin-top: 15px;
+      font-size: 14px;
+    }
+
+    a {
+      color: var(--primary-dark);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+  </style>
+
+  <script>
+    function loginUser(event) {
+      event.preventDefault();
+      fetch("http://localhost:5000/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: document.getElementById("username").value,
+          password: document.getElementById("password").value
+        })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          alert("تم تسجيل الدخول بنجاح!");
+          window.location.href = "index.html";
+        } else {
+          alert(data.error || "فشل تسجيل الدخول");
+        }
+      });
+    }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <div class="ai-icon">🤖</div>
+    <h2>تسجيل الدخول</h2>
+    <form onsubmit="loginUser(event)">
+      <label for="username">اسم المستخدم:</label>
+      <input type="text" id="username" required>
+
+      <label for="password">كلمة المرور:</label>
+      <input type="password" id="password" required>
+
+      <button type="submit">دخول</button>
+    </form>
+    <p>ليس لديك حساب؟ <a href="signup.html">أنشئ حساب</a></p>
+  </div>
+</body>
+</html>
