@@ -1,4 +1,5 @@
 Flask==2.2.3
-psycopg2==2.9.6
-flask-cors==4.0.2
+werkzeug==2.2.3
 gunicorn==20.1.0
+flask-cors==4.0.2
+psycopg2==2.9.6
