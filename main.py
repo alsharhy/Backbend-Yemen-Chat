@@ -53,7 +53,7 @@ def apply_cors(response):
 @app.route("/signup", methods=["POST", "OPTIONS"])
 def signup():
     if request.method == "OPTIONS":
-        return make_response(jsonify({}), 200
+        return jsonify({}), 200
     
     data = request.json
     logger.info(f"طلب تسجيل جديد: {data}")
@@ -79,7 +79,7 @@ def signup():
 @app.route("/login", methods=["POST", "OPTIONS"])
 def login():
     if request.method == "OPTIONS":
-        return make_response(jsonify({}), 200
+        return jsonify({}), 200
     
     data = request.json
     logger.info(f"طلب تسجيل دخول: {data['username']}")
@@ -155,7 +155,7 @@ def login():
 @app.route("/users", methods=["GET", "OPTIONS"])
 def get_users():
     if request.method == "OPTIONS":
-        return make_response(jsonify({}), 200)
+        return jsonify({}), 200
     
     conn = get_connection()
     cursor = conn.cursor()
@@ -168,7 +168,7 @@ def get_users():
 @app.route("/users/<int:user_id>", methods=["GET", "PUT", "DELETE", "OPTIONS"])
 def user_operations(user_id):
     if request.method == "OPTIONS":
-        return make_response(jsonify({}), 200)
+        return jsonify({}), 200
     
     conn = get_connection()
     cursor = conn.cursor()
@@ -212,7 +212,7 @@ def user_operations(user_id):
 @app.route("/users/<int:user_id>/admin", methods=["POST", "OPTIONS"])
 def toggle_admin(user_id):
     if request.method == "OPTIONS":
-        return make_response(jsonify({}), 200)
+        return jsonify({}), 200
     
     conn = get_connection()
     cursor = conn.cursor()
