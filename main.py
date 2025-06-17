@@ -7,7 +7,7 @@ import hashlib
 import os
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
