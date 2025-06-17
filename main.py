@@ -1,13 +1,13 @@
 from flask import Flask, request, jsonify
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from flask_cors import CORS
+from flask_cors import CORS, cross_origin
 from datetime import datetime
 import hashlib
 import os
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app, supports_credentials=True, resources={r"/*": {"origins": "*"}})
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -38,6 +38,7 @@ def init_db():
     conn.close()
 
 @app.route("/signup", methods=["POST"])
+@cross_origin()
 def signup():
     data = request.json
     try:
@@ -55,18 +56,17 @@ def signup():
         return jsonify({"success": False, "error": "اسم المستخدم مستخدم بالفعل"})
 
 @app.route("/login", methods=["POST"])
+@cross_origin()
 def login():
     data = request.json
     conn = get_connection()
     cursor = conn.cursor()
     
-    # التحقق من حساب الإدمن الخاص
+    # حساب الإدمن اليدوي
     if data["username"] == "admin" and data["password"] == "1234":
-        # إذا كان هناك حساب admin موجود في قاعدة البيانات، نستخدمه. وإلا ننشئه
         cursor.execute("SELECT * FROM users WHERE username = 'admin'")
         admin_user = cursor.fetchone()
         if not admin_user:
-            # إنشاء حساب admin إذا لم يكن موجودًا
             cursor.execute("""
                 INSERT INTO users (fullname, email, username, password, is_admin)
                 VALUES (%s, %s, %s, %s, %s)
@@ -74,13 +74,12 @@ def login():
             conn.commit()
             cursor.execute("SELECT * FROM users WHERE username = 'admin'")
             admin_user = cursor.fetchone()
-        # إرجاع بيانات الإدمن
         return jsonify({
             "success": True,
             "is_admin": True,
             "user_id": admin_user['id']
         })
-    
+
     cursor.execute("""
         SELECT * FROM users WHERE username = %s AND password = %s
     """, (data["username"], hash_password(data["password"])))
@@ -119,6 +118,7 @@ def login():
         return jsonify({"success": False, "error": "بيانات الدخول غير صحيحة"})
 
 @app.route("/users", methods=["GET"])
+@cross_origin()
 def get_users():
     conn = get_connection()
     cursor = conn.cursor()
@@ -129,6 +129,7 @@ def get_users():
     return jsonify(users)
 
 @app.route("/users/<int:user_id>", methods=["GET", "PUT", "DELETE"])
+@cross_origin()
 def user_operations(user_id):
     conn = get_connection()
     cursor = conn.cursor()
@@ -170,6 +171,7 @@ def user_operations(user_id):
         return jsonify({"success": True})
 
 @app.route("/users/<int:user_id>/admin", methods=["POST"])
+@cross_origin()
 def toggle_admin(user_id):
     conn = get_connection()
     cursor = conn.cursor()
