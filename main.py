@@ -43,9 +43,22 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id SERIAL PRIMARY KEY,
+            chat_id INTEGER REFERENCES chats(id) ON DELETE CASCADE,
+            sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            message TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     conn.commit()
     cursor.close()
     conn.close()
+
+# تشغيل تهيئة قاعدة البيانات عند بدء التطبيق
+init_db()
 
 @app.route("/signup", methods=["POST"])
 def signup():
@@ -208,6 +221,42 @@ def delete_chat(chat_id):
     conn.close()
     return jsonify({"success": True})
 
+@app.route("/messages/<int:chat_id>", methods=["GET"])
+def get_messages(chat_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT m.id, m.message, m.created_at, m.sender_id, u.username as sender_username
+        FROM messages m
+        LEFT JOIN users u ON m.sender_id = u.id
+        WHERE m.chat_id = %s
+        ORDER BY m.created_at ASC
+    """, (chat_id,))
+    messages = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return jsonify(messages)
+
+@app.route("/messages", methods=["POST"])
+def send_message():
+    data = request.json
+    chat_id = data.get("chat_id")
+    sender_id = data.get("sender_id")
+    message = data.get("message")
+
+    if not all([chat_id, sender_id, message]):
+        return jsonify({"success": False, "error": "chat_id و sender_id و message مطلوبون"}), 400
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO messages (chat_id, sender_id, message) VALUES (%s, %s, %s) RETURNING id
+    """, (chat_id, sender_id, message))
+    message_id = cursor.fetchone()["id"]
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return jsonify({"success": True, "message_id": message_id})
+
 if __name__ == "__main__":
-    init_db()
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(debug=True)
