@@ -1,15 +1,14 @@
 from flask import Flask, request, jsonify
 import psycopg2
 from psycopg2.extras import RealDictCursor
-import hashlib
-import os
 from flask_cors import CORS
 from datetime import datetime
+import hashlib
+import os
 
 app = Flask(__name__)
 CORS(app)
 
-# الاتصال بقاعدة البيانات
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def get_connection():
@@ -34,6 +33,7 @@ def init_db():
         )
     """)
     conn.commit()
+    cursor.close()
     conn.close()
 
 @app.route("/signup", methods=["POST"])
@@ -41,19 +41,17 @@ def signup():
     data = request.json
     try:
         conn = get_connection()
-        conn.execute("""
+        cursor = conn.cursor()
+        cursor.execute("""
             INSERT INTO users (fullname, email, username, password)
             VALUES (%s, %s, %s, %s)
-        """, (
-            data["fullname"], data["email"], data["username"], hash_password(data["password"])
-        ))
+        """, (data["fullname"], data["email"], data["username"], hash_password(data["password"])))
         conn.commit()
+        cursor.close()
         conn.close()
         return jsonify({"success": True})
     except psycopg2.IntegrityError:
         return jsonify({"success": False, "error": "اسم المستخدم مستخدم بالفعل"})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
 
 @app.route("/login", methods=["POST"])
 def login():
@@ -62,13 +60,12 @@ def login():
     cursor = conn.cursor()
     cursor.execute("""
         SELECT * FROM users WHERE username = %s AND password = %s
-    """, (
-        data["username"], hash_password(data["password"])
-    ))
+    """, (data["username"], hash_password(data["password"])))
     result = cursor.fetchone()
 
     if result:
         if result["permanently_banned"]:
+            cursor.close()
             conn.close()
             return jsonify({"success": False, "error": "تم حظر الحساب بشكل دائم"})
 
@@ -76,6 +73,7 @@ def login():
             try:
                 banned_until = datetime.strptime(result["banned_until"], "%Y-%m-%d %H:%M:%S")
                 if banned_until > datetime.now():
+                    cursor.close()
                     conn.close()
                     return jsonify({"success": False, "error": "الحساب محظور مؤقتًا حتى " + result["banned_until"]})
             except:
@@ -83,13 +81,13 @@ def login():
 
         cursor.execute("""
             UPDATE users SET last_login = %s WHERE id = %s
-        """, (
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"), result["id"]
-        ))
+        """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), result["id"]))
         conn.commit()
+        cursor.close()
         conn.close()
         return jsonify({"success": True})
     else:
+        cursor.close()
         conn.close()
         return jsonify({"success": False, "error": "بيانات الدخول غير صحيحة"})
 
@@ -99,20 +97,22 @@ def get_users():
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users")
     users = cursor.fetchall()
+    cursor.close()
     conn.close()
     return jsonify(users)
 
-@app.route("/users/<int:user_id>", methods=["GET", "PUT"])
-def update_user(user_id):
+@app.route("/users/<int:user_id>", methods=["GET", "PUT", "DELETE"])
+def user_operations(user_id):
     conn = get_connection()
     cursor = conn.cursor()
 
     if request.method == "GET":
         cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
-        user = cursor.fetchone()
+        row = cursor.fetchone()
+        cursor.close()
         conn.close()
-        if user:
-            return jsonify(user)
+        if row:
+            return jsonify(row)
         else:
             return jsonify({"error": "المستخدم غير موجود"}), 404
 
@@ -131,17 +131,16 @@ def update_user(user_id):
             user_id
         ))
         conn.commit()
+        cursor.close()
         conn.close()
         return jsonify({"success": True})
 
-@app.route("/users/<int:user_id>", methods=["DELETE"])
-def delete_user(user_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
-    conn.commit()
-    conn.close()
-    return jsonify({"success": True})
+    elif request.method == "DELETE":
+        cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return jsonify({"success": True})
 
 if __name__ == "__main__":
     init_db()
