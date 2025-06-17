@@ -210,6 +210,24 @@ def delete_chat(chat_id):
     conn.close()
     return jsonify({"success": True})
 
+@app.route("/save_chat", methods=["POST"])
+def save_chat():
+    data = request.json
+    user_id = data.get("user_id")
+    title = data.get("title", "محادثة جديدة")
+
+    if not user_id:
+        return jsonify({"error": "user_id مطلوب"}), 400
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO chats (user_id, title) VALUES (%s, %s) RETURNING id", (user_id, title))
+    chat_id = cursor.fetchone()["id"]
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return jsonify({"success": True, "chat_id": chat_id})
+
 if __name__ == "__main__":
     init_db()
     app.run(debug=True, host="0.0.0.0", port=5000)
