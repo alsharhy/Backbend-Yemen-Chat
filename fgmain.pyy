@@ -5,14 +5,9 @@ from flask_cors import CORS
 from datetime import datetime
 import hashlib
 import os
-import logging
 
 app = Flask(__name__)
-CORS(app)  # إضافة دعم CORS
-
-# تهيئة نظام التسجيل
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+CORS(app)
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -42,22 +37,9 @@ def init_db():
     cursor.close()
     conn.close()
 
-@app.after_request
-def apply_cors(response):
-    """إضافة رؤوس CORS لجميع الاستجابات"""
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-    return response
-
-@app.route("/signup", methods=["POST", "OPTIONS"])
+@app.route("/signup", methods=["POST"])
 def signup():
-    if request.method == "OPTIONS":
-        return make_response(jsonify({}), 200
-    
     data = request.json
-    logger.info(f"طلب تسجيل جديد: {data}")
-    
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -69,31 +51,25 @@ def signup():
         cursor.close()
         conn.close()
         return jsonify({"success": True})
-    except psycopg2.IntegrityError as e:
-        logger.error(f"خطأ في التسجيل: {str(e)}")
-        return jsonify({"success": False, "error": "اسم المستخدم مستخدم بالفعل"}), 400
-    except Exception as e:
-        logger.error(f"خطأ غير متوقع في التسجيل: {str(e)}")
-        return jsonify({"success": False, "error": "حدث خطأ في الخادم"}), 500
+    except psycopg2.IntegrityError:
+        return jsonify({"success": False, "error": "اسم المستخدم مستخدم بالفعل"})
 
-@app.route("/login", methods=["POST", "OPTIONS"])
+@app.route("/login", methods=["POST"])
 def login():
-    if request.method == "OPTIONS":
-        return make_response(jsonify({}), 200
-    
-    data = request.json
-    logger.info(f"طلب تسجيل دخول: {data['username']}")
-    
+    data = request.json or {}
+    username = data.get("username")
+    password = data.get("password")
+
+    if not username or not password:
+        return jsonify({"success": False, "error": "يرجى إدخال اسم المستخدم وكلمة المرور"}), 400
+
     conn = get_connection()
     cursor = conn.cursor()
-    
-    # التحقق من حساب الإدمن الخاص
-    if data["username"] == "admin" and data["password"] == "1234":
-        # إذا كان هناك حساب admin موجود في قاعدة البيانات، نستخدمه. وإلا ننشئه
+
+    if username == "admin" and password == "1234":
         cursor.execute("SELECT * FROM users WHERE username = 'admin'")
         admin_user = cursor.fetchone()
         if not admin_user:
-            # إنشاء حساب admin إذا لم يكن موجودًا
             cursor.execute("""
                 INSERT INTO users (fullname, email, username, password, is_admin)
                 VALUES (%s, %s, %s, %s, %s)
@@ -101,62 +77,52 @@ def login():
             conn.commit()
             cursor.execute("SELECT * FROM users WHERE username = 'admin'")
             admin_user = cursor.fetchone()
-        
-        # إرجاع بيانات الإدمن
-        response = jsonify({
+        return jsonify({
             "success": True,
             "is_admin": True,
             "user_id": admin_user['id']
         })
-        cursor.close()
-        conn.close()
-        return response
-    
+
     cursor.execute("""
         SELECT * FROM users WHERE username = %s AND password = %s
-    """, (data["username"], hash_password(data["password"])))
+    """, (username, hash_password(password)))
     result = cursor.fetchone()
 
-    if result:
-        if result["permanently_banned"]:
-            cursor.close()
-            conn.close()
-            return jsonify({"success": False, "error": "تم حظر الحساب بشكل دائم"}), 403
-
-        if result["banned_until"]:
-            try:
-                banned_until = datetime.strptime(result["banned_until"], "%Y-%m-%d %H:%M:%S")
-                if banned_until > datetime.now():
-                    cursor.close()
-                    conn.close()
-                    return jsonify({"success": False, "error": "الحساب محظور مؤقتًا حتى " + result["banned_until"]}), 403
-            except Exception as e:
-                logger.error(f"خطأ في معالجة وقت الحظر: {str(e)}")
-                # تجاهل الخطأ ومتابعة العملية
-
-        cursor.execute("""
-            UPDATE users SET last_login = %s WHERE id = %s
-        """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), result["id"]))
-        conn.commit()
-        
-        response = jsonify({
-            "success": True,
-            "is_admin": result['is_admin'],
-            "user_id": result["id"]
-        })
+    if not result:
         cursor.close()
         conn.close()
-        return response
-    else:
+        return jsonify({"success": False, "error": "بيانات الدخول غير صحيحة"})
+
+    if result["permanently_banned"]:
         cursor.close()
         conn.close()
-        return jsonify({"success": False, "error": "بيانات الدخول غير صحيحة"}), 401
+        return jsonify({"success": False, "error": "تم حظر الحساب بشكل دائم"})
 
-@app.route("/users", methods=["GET", "OPTIONS"])
+    if result["banned_until"]:
+        try:
+            banned_until = datetime.strptime(result["banned_until"], "%Y-%m-%d %H:%M:%S")
+            if banned_until > datetime.now():
+                cursor.close()
+                conn.close()
+                return jsonify({"success": False, "error": f"الحساب محظور مؤقتًا حتى {result['banned_until']}"})
+        except Exception as e:
+            pass
+
+    cursor.execute("""
+        UPDATE users SET last_login = %s WHERE id = %s
+    """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), result["id"]))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({
+        "success": True,
+        "is_admin": result["is_admin"],
+        "user_id": result["id"]
+    })
+
+@app.route("/users", methods=["GET"])
 def get_users():
-    if request.method == "OPTIONS":
-        return make_response(jsonify({}), 200)
-    
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users")
@@ -165,11 +131,8 @@ def get_users():
     conn.close()
     return jsonify(users)
 
-@app.route("/users/<int:user_id>", methods=["GET", "PUT", "DELETE", "OPTIONS"])
+@app.route("/users/<int:user_id>", methods=["GET", "PUT", "DELETE"])
 def user_operations(user_id):
-    if request.method == "OPTIONS":
-        return make_response(jsonify({}), 200)
-    
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -209,20 +172,14 @@ def user_operations(user_id):
         conn.close()
         return jsonify({"success": True})
 
-@app.route("/users/<int:user_id>/admin", methods=["POST", "OPTIONS"])
+@app.route("/users/<int:user_id>/admin", methods=["POST"])
 def toggle_admin(user_id):
-    if request.method == "OPTIONS":
-        return make_response(jsonify({}), 200)
-    
     conn = get_connection()
     cursor = conn.cursor()
     
     cursor.execute("SELECT is_admin FROM users WHERE id = %s", (user_id,))
-    user = cursor.fetchone()
-    if not user:
-        return jsonify({"success": False, "error": "المستخدم غير موجود"}), 404
-        
-    current_status = user["is_admin"]
+    current_status = cursor.fetchone()["is_admin"]
+    
     new_status = not current_status
     
     cursor.execute("""
@@ -242,7 +199,5 @@ def toggle_admin(user_id):
     })
 
 if __name__ == "__main__":
-    logger.info("جارٍ تهيئة قاعدة البيانات...")
     init_db()
-    logger.info("بدء تشغيل الخادم...")
     app.run(debug=True, host="0.0.0.0", port=5000)
