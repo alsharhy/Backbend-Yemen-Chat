@@ -20,6 +20,7 @@ def hash_password(password):
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
@@ -32,6 +33,16 @@ def init_db():
             permanently_banned INTEGER DEFAULT 0
         )
     """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chats (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            title TEXT DEFAULT 'محادثة جديدة',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     conn.commit()
     cursor.close()
     conn.close()
@@ -85,7 +96,7 @@ def login():
         conn.commit()
         cursor.close()
         conn.close()
-        return jsonify({"success": True})
+        return jsonify({"success": True, "user_id": result["id"]})
     else:
         cursor.close()
         conn.close()
@@ -141,6 +152,63 @@ def user_operations(user_id):
         cursor.close()
         conn.close()
         return jsonify({"success": True})
+
+# ✅ APIs for chat management
+
+@app.route("/chats", methods=["GET"])
+def get_chats():
+    user_id = request.args.get("user_id")
+    if not user_id:
+        return jsonify({"error": "يرجى توفير user_id"}), 400
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM chats WHERE user_id = %s ORDER BY created_at DESC", (user_id,))
+    chats = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return jsonify(chats)
+
+@app.route("/chats", methods=["POST"])
+def create_chat():
+    data = request.json
+    user_id = data.get("user_id")
+    title = data.get("title", "محادثة جديدة")
+
+    if not user_id:
+        return jsonify({"error": "user_id مطلوب"}), 400
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO chats (user_id, title) VALUES (%s, %s) RETURNING id", (user_id, title))
+    chat_id = cursor.fetchone()["id"]
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return jsonify({"success": True, "chat_id": chat_id})
+
+@app.route("/chats/<int:chat_id>", methods=["PUT"])
+def update_chat(chat_id):
+    data = request.json
+    title = data.get("title")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE chats SET title = %s WHERE id = %s", (title, chat_id))
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return jsonify({"success": True})
+
+@app.route("/chats/<int:chat_id>", methods=["DELETE"])
+def delete_chat(chat_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM chats WHERE id = %s", (chat_id,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return jsonify({"success": True})
 
 if __name__ == "__main__":
     init_db()
