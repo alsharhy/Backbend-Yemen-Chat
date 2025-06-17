@@ -107,13 +107,92 @@ def login():
     cursor.close()
     conn.close()
 
+    # تحديد نوع الصفحة المستهدفة بناءً على صلاحية المستخدم
+    redirect_to = "admin_dashboard" if result["is_admin"] else "user_dashboard"
+    
     return jsonify({
         "success": True,
         "is_admin": result["is_admin"],
-        "user_id": result["id"]
+        "user_id": result["id"],
+        "redirect_to": redirect_to  # إضافة هذا الحقل الجديد
     })
 
-# بقية الكود (get_users, user_operations, toggle_admin) تبقى كما هي دون تغيير
+@app.route("/users", methods=["GET"])
+def get_users():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users")
+    users = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return jsonify(users)
+
+@app.route("/users/<int:user_id>", methods=["GET", "PUT", "DELETE"])
+def user_operations(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    if request.method == "GET":
+        cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        if row:
+            return jsonify(row)
+        else:
+            return jsonify({"error": "المستخدم غير موجود"}), 404
+
+    elif request.method == "PUT":
+        data = request.json
+        cursor.execute("""
+            UPDATE users
+            SET fullname = %s, email = %s, username = %s, banned_until = %s, permanently_banned = %s
+            WHERE id = %s
+        """, (
+            data.get("fullname"),
+            data.get("email"),
+            data.get("username"),
+            data.get("banned_until"),
+            data.get("permanently_banned", 0),
+            user_id
+        ))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return jsonify({"success": True})
+
+    elif request.method == "DELETE":
+        cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return jsonify({"success": True})
+
+@app.route("/users/<int:user_id>/admin", methods=["POST"])
+def toggle_admin(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT is_admin FROM users WHERE id = %s", (user_id,))
+    current_status = cursor.fetchone()["is_admin"]
+    
+    new_status = not current_status
+    
+    cursor.execute("""
+        UPDATE users
+        SET is_admin = %s
+        WHERE id = %s
+    """, (new_status, user_id))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+    
+    return jsonify({
+        "success": True,
+        "is_admin": new_status,
+        "message": f"تم {'ترقية' if new_status else 'إزالة'} المستخدم إلى مشرف"
+    })
 
 if __name__ == "__main__":
     init_db()
