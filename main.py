@@ -29,7 +29,8 @@ def init_db():
             password TEXT NOT NULL,
             last_login TEXT,
             banned_until TEXT,
-            permanently_banned INTEGER DEFAULT 0
+            permanently_banned INTEGER DEFAULT 0,
+            is_admin BOOLEAN DEFAULT FALSE
         )
     """)
     conn.commit()
@@ -58,6 +59,28 @@ def login():
     data = request.json
     conn = get_connection()
     cursor = conn.cursor()
+    
+    # التحقق من حساب الإدمن الخاص
+    if data["username"] == "admin" and data["password"] == "1234":
+        # إذا كان هناك حساب admin موجود في قاعدة البيانات، نستخدمه. وإلا ننشئه
+        cursor.execute("SELECT * FROM users WHERE username = 'admin'")
+        admin_user = cursor.fetchone()
+        if not admin_user:
+            # إنشاء حساب admin إذا لم يكن موجودًا
+            cursor.execute("""
+                INSERT INTO users (fullname, email, username, password, is_admin)
+                VALUES (%s, %s, %s, %s, %s)
+            """, ("Admin User", "admin@example.com", "admin", hash_password("1234"), True))
+            conn.commit()
+            cursor.execute("SELECT * FROM users WHERE username = 'admin'")
+            admin_user = cursor.fetchone()
+        # إرجاع بيانات الإدمن
+        return jsonify({
+            "success": True,
+            "is_admin": True,
+            "user_id": admin_user['id']
+        })
+    
     cursor.execute("""
         SELECT * FROM users WHERE username = %s AND password = %s
     """, (data["username"], hash_password(data["password"])))
@@ -85,7 +108,11 @@ def login():
         conn.commit()
         cursor.close()
         conn.close()
-        return jsonify({"success": True})
+        return jsonify({
+            "success": True,
+            "is_admin": result['is_admin'],
+            "user_id": result["id"]
+        })
     else:
         cursor.close()
         conn.close()
@@ -141,6 +168,32 @@ def user_operations(user_id):
         cursor.close()
         conn.close()
         return jsonify({"success": True})
+
+@app.route("/users/<int:user_id>/admin", methods=["POST"])
+def toggle_admin(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT is_admin FROM users WHERE id = %s", (user_id,))
+    current_status = cursor.fetchone()["is_admin"]
+    
+    new_status = not current_status
+    
+    cursor.execute("""
+        UPDATE users
+        SET is_admin = %s
+        WHERE id = %s
+    """, (new_status, user_id))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+    
+    return jsonify({
+        "success": True,
+        "is_admin": new_status,
+        "message": f"تم {'ترقية' if new_status else 'إزالة'} المستخدم إلى مشرف"
+    })
 
 if __name__ == "__main__":
     init_db()
