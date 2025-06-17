@@ -5,6 +5,7 @@ from flask_cors import CORS
 from datetime import datetime
 import hashlib
 import os
+import uuid
 
 app = Flask(__name__)
 CORS(app)
@@ -21,10 +22,6 @@ def init_db():
     conn = get_connection()
     cursor = conn.cursor()
     
-    # حذف جميع المستخدمين الموجودين
-    cursor.execute("DROP TABLE IF EXISTS users CASCADE")
-    
-    # إعادة إنشاء الجدول
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
@@ -39,6 +36,17 @@ def init_db():
         )
     """)
     
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS news (
+            id SERIAL PRIMARY KEY,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            image_url TEXT,
+            status TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
     # تهيئة حساب المسؤول
     cursor.execute("""
         INSERT INTO users (fullname, email, username, password, is_admin)
@@ -49,7 +57,7 @@ def init_db():
     conn.commit()
     cursor.close()
     conn.close()
-    print("تمت إعادة تهيئة قاعدة البيانات وحذف جميع المستخدمين")
+    print("تمت تهيئة قاعدة البيانات")
 
 @app.route("/signup", methods=["POST"])
 def signup():
@@ -80,25 +88,21 @@ def login():
     conn = get_connection()
     cursor = conn.cursor()
 
-    # البحث عن المستخدم
     cursor.execute("""
         SELECT * FROM users WHERE username = %s AND password = %s
     """, (username, hash_password(password)))
     result = cursor.fetchone()
 
-    # إذا لم يتم العثور على المستخدم
     if not result:
         cursor.close()
         conn.close()
         return jsonify({"success": False, "error": "بيانات الدخول غير صحيحة"})
 
-    # التحقق من الحظر الدائم
     if result["permanently_banned"]:
         cursor.close()
         conn.close()
         return jsonify({"success": False, "error": "تم حظر الحساب بشكل دائم"})
 
-    # التحقق من الحظر المؤقت
     if result["banned_until"]:
         try:
             banned_until = datetime.strptime(result["banned_until"], "%Y-%m-%d %H:%M:%S")
@@ -109,7 +113,6 @@ def login():
         except Exception as e:
             print(f"خطأ في معالجة تاريخ الحظر: {e}")
 
-    # تحديث وقت آخر دخول
     cursor.execute("""
         UPDATE users SET last_login = %s WHERE id = %s
     """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), result["id"]))
@@ -117,14 +120,11 @@ def login():
     cursor.close()
     conn.close()
 
-    # تحديد نوع الصفحة المستهدفة بناءً على صلاحية المستخدم
-    redirect_to = "admin_dashboard" if result["is_admin"] else "user_dashboard"
-    
     return jsonify({
         "success": True,
         "is_admin": result["is_admin"],
         "user_id": result["id"],
-        "redirect_to": redirect_to
+        "redirect_to": "admin_dashboard" if result["is_admin"] else "user_dashboard"
     })
 
 @app.route("/users", methods=["GET"])
@@ -204,11 +204,81 @@ def toggle_admin(user_id):
         "message": f"تم {'ترقية' if new_status else 'إزالة'} المستخدم إلى مشرف"
     })
 
-@app.route("/reset-db", methods=["POST"])
-def reset_database():
-    """إعادة تهيئة قاعدة البيانات وحذف جميع المستخدمين"""
-    init_db()
-    return jsonify({"success": True, "message": "تمت إعادة تهيئة قاعدة البيانات بنجاح"})
+@app.route("/news", methods=["GET", "POST"])
+def news_operations():
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    if request.method == "GET":
+        cursor.execute("SELECT * FROM news ORDER BY created_at DESC")
+        news = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return jsonify(news)
+    
+    elif request.method == "POST":
+        data = request.json
+        try:
+            cursor.execute("""
+                INSERT INTO news (title, content, image_url, status)
+                VALUES (%s, %s, %s, %s)
+            """, (data["title"], data["content"], data.get("image_url", ""), data["status"]))
+            conn.commit()
+            cursor.close()
+            conn.close()
+            return jsonify({"success": True})
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)})
+
+@app.route("/news/<int:news_id>", methods=["DELETE", "PUT"])
+def single_news_operations(news_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    if request.method == "DELETE":
+        cursor.execute("DELETE FROM news WHERE id = %s", (news_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return jsonify({"success": True})
+    
+    elif request.method == "PUT":
+        data = request.json
+        cursor.execute("""
+            UPDATE news
+            SET title = %s, content = %s, image_url = %s, status = %s
+            WHERE id = %s
+        """, (data["title"], data["content"], data["image_url"], data["status"], news_id))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return jsonify({"success": True})
+
+@app.route("/update-profile", methods=["POST"])
+def update_profile():
+    data = request.json
+    user_id = data.get("user_id")
+    
+    if not user_id:
+        return jsonify({"success": False, "error": "User ID missing"}), 400
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            UPDATE users
+            SET fullname = %s, email = %s, username = %s
+            WHERE id = %s
+        """, (data["fullname"], data["email"], data["username"], user_id))
+        
+        conn.commit()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+    finally:
+        cursor.close()
+        conn.close()
 
 if __name__ == "__main__":
     init_db()
