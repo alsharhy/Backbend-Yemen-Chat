@@ -1,13 +1,13 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from flask_cors import CORS, cross_origin
+from flask_cors import CORS
 from datetime import datetime
 import hashlib
 import os
 
 app = Flask(__name__)
-CORS(app, supports_credentials=True, resources={r"/*": {"origins": "*"}})
+CORS(app)
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -38,7 +38,6 @@ def init_db():
     conn.close()
 
 @app.route("/signup", methods=["POST"])
-@cross_origin()
 def signup():
     data = request.json
     try:
@@ -56,14 +55,18 @@ def signup():
         return jsonify({"success": False, "error": "اسم المستخدم مستخدم بالفعل"})
 
 @app.route("/login", methods=["POST"])
-@cross_origin()
 def login():
-    data = request.json
+    data = request.json or {}
+    username = data.get("username")
+    password = data.get("password")
+
+    if not username or not password:
+        return jsonify({"success": False, "error": "يرجى إدخال اسم المستخدم وكلمة المرور"}), 400
+
     conn = get_connection()
     cursor = conn.cursor()
-    
-    # حساب الإدمن اليدوي
-    if data["username"] == "admin" and data["password"] == "1234":
+
+    if username == "admin" and password == "1234":
         cursor.execute("SELECT * FROM users WHERE username = 'admin'")
         admin_user = cursor.fetchone()
         if not admin_user:
@@ -82,43 +85,43 @@ def login():
 
     cursor.execute("""
         SELECT * FROM users WHERE username = %s AND password = %s
-    """, (data["username"], hash_password(data["password"])))
+    """, (username, hash_password(password)))
     result = cursor.fetchone()
 
-    if result:
-        if result["permanently_banned"]:
-            cursor.close()
-            conn.close()
-            return jsonify({"success": False, "error": "تم حظر الحساب بشكل دائم"})
-
-        if result["banned_until"]:
-            try:
-                banned_until = datetime.strptime(result["banned_until"], "%Y-%m-%d %H:%M:%S")
-                if banned_until > datetime.now():
-                    cursor.close()
-                    conn.close()
-                    return jsonify({"success": False, "error": "الحساب محظور مؤقتًا حتى " + result["banned_until"]})
-            except:
-                pass
-
-        cursor.execute("""
-            UPDATE users SET last_login = %s WHERE id = %s
-        """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), result["id"]))
-        conn.commit()
-        cursor.close()
-        conn.close()
-        return jsonify({
-            "success": True,
-            "is_admin": result['is_admin'],
-            "user_id": result["id"]
-        })
-    else:
+    if not result:
         cursor.close()
         conn.close()
         return jsonify({"success": False, "error": "بيانات الدخول غير صحيحة"})
 
+    if result["permanently_banned"]:
+        cursor.close()
+        conn.close()
+        return jsonify({"success": False, "error": "تم حظر الحساب بشكل دائم"})
+
+    if result["banned_until"]:
+        try:
+            banned_until = datetime.strptime(result["banned_until"], "%Y-%m-%d %H:%M:%S")
+            if banned_until > datetime.now():
+                cursor.close()
+                conn.close()
+                return jsonify({"success": False, "error": f"الحساب محظور مؤقتًا حتى {result['banned_until']}"})
+        except Exception as e:
+            pass
+
+    cursor.execute("""
+        UPDATE users SET last_login = %s WHERE id = %s
+    """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), result["id"]))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return jsonify({
+        "success": True,
+        "is_admin": result["is_admin"],
+        "user_id": result["id"]
+    })
+
 @app.route("/users", methods=["GET"])
-@cross_origin()
 def get_users():
     conn = get_connection()
     cursor = conn.cursor()
@@ -129,7 +132,6 @@ def get_users():
     return jsonify(users)
 
 @app.route("/users/<int:user_id>", methods=["GET", "PUT", "DELETE"])
-@cross_origin()
 def user_operations(user_id):
     conn = get_connection()
     cursor = conn.cursor()
@@ -171,7 +173,6 @@ def user_operations(user_id):
         return jsonify({"success": True})
 
 @app.route("/users/<int:user_id>/admin", methods=["POST"])
-@cross_origin()
 def toggle_admin(user_id):
     conn = get_connection()
     cursor = conn.cursor()
