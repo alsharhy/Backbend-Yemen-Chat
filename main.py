@@ -20,6 +20,11 @@ def hash_password(password):
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
+    
+    # حذف جميع المستخدمين الموجودين
+    cursor.execute("DROP TABLE IF EXISTS users CASCADE")
+    
+    # إعادة إنشاء الجدول
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
@@ -34,17 +39,17 @@ def init_db():
         )
     """)
     
-    # تهيئة حساب المسؤول إذا لم يكن موجودًا
-    cursor.execute("SELECT * FROM users WHERE username = 'admin'")
-    if not cursor.fetchone():
-        cursor.execute("""
-            INSERT INTO users (fullname, email, username, password, is_admin)
-            VALUES (%s, %s, %s, %s, %s)
-        """, ("Admin User", "admin@example.com", "admin", hash_password("1234"), True))
+    # تهيئة حساب المسؤول
+    cursor.execute("""
+        INSERT INTO users (fullname, email, username, password, is_admin)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (username) DO NOTHING
+    """, ("Admin User", "admin@example.com", "admin", hash_password("1234"), True))
     
     conn.commit()
     cursor.close()
     conn.close()
+    print("تمت إعادة تهيئة قاعدة البيانات وحذف جميع المستخدمين")
 
 @app.route("/signup", methods=["POST"])
 def signup():
@@ -75,21 +80,25 @@ def login():
     conn = get_connection()
     cursor = conn.cursor()
 
+    # البحث عن المستخدم
     cursor.execute("""
         SELECT * FROM users WHERE username = %s AND password = %s
     """, (username, hash_password(password)))
     result = cursor.fetchone()
 
+    # إذا لم يتم العثور على المستخدم
     if not result:
         cursor.close()
         conn.close()
         return jsonify({"success": False, "error": "بيانات الدخول غير صحيحة"})
 
+    # التحقق من الحظر الدائم
     if result["permanently_banned"]:
         cursor.close()
         conn.close()
         return jsonify({"success": False, "error": "تم حظر الحساب بشكل دائم"})
 
+    # التحقق من الحظر المؤقت
     if result["banned_until"]:
         try:
             banned_until = datetime.strptime(result["banned_until"], "%Y-%m-%d %H:%M:%S")
@@ -98,8 +107,9 @@ def login():
                 conn.close()
                 return jsonify({"success": False, "error": f"الحساب محظور مؤقتًا حتى {result['banned_until']}"})
         except Exception as e:
-            pass
+            print(f"خطأ في معالجة تاريخ الحظر: {e}")
 
+    # تحديث وقت آخر دخول
     cursor.execute("""
         UPDATE users SET last_login = %s WHERE id = %s
     """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), result["id"]))
@@ -114,7 +124,7 @@ def login():
         "success": True,
         "is_admin": result["is_admin"],
         "user_id": result["id"],
-        "redirect_to": redirect_to  # إضافة هذا الحقل الجديد
+        "redirect_to": redirect_to
     })
 
 @app.route("/users", methods=["GET"])
@@ -193,6 +203,12 @@ def toggle_admin(user_id):
         "is_admin": new_status,
         "message": f"تم {'ترقية' if new_status else 'إزالة'} المستخدم إلى مشرف"
     })
+
+@app.route("/reset-db", methods=["POST"])
+def reset_database():
+    """إعادة تهيئة قاعدة البيانات وحذف جميع المستخدمين"""
+    init_db()
+    return jsonify({"success": True, "message": "تمت إعادة تهيئة قاعدة البيانات بنجاح"})
 
 if __name__ == "__main__":
     init_db()
