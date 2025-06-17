@@ -5,7 +5,6 @@ from flask_cors import CORS
 from datetime import datetime
 import hashlib
 import os
-import json
 
 app = Flask(__name__)
 CORS(app)
@@ -21,7 +20,6 @@ def hash_password(password):
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
-    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
@@ -34,134 +32,115 @@ def init_db():
             permanently_banned INTEGER DEFAULT 0
         )
     """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS chats (
-            id TEXT PRIMARY KEY,
-            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-            title TEXT DEFAULT 'محادثة جديدة',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id SERIAL PRIMARY KEY,
-            chat_id TEXT REFERENCES chats(id) ON DELETE CASCADE,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            timestamp TIMESTAMP
-        )
-    """)
-
     conn.commit()
     cursor.close()
     conn.close()
 
-@app.route("/api/chats", methods=["GET"])
-def get_chats():
-    user_id = request.args.get("user_id")
-    if not user_id:
-        return jsonify({"error": "يرجى توفير user_id"}), 400
-
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("""
-            SELECT c.*, 
-                   json_agg(json_build_object(
-                       'role', m.role, 
-                       'content', m.content, 
-                       'timestamp', m.timestamp
-                   ) ORDER BY m.timestamp) AS messages
-            FROM chats c
-            LEFT JOIN messages m ON c.id = m.chat_id
-            WHERE c.user_id = %s
-            GROUP BY c.id
-            ORDER BY c.created_at DESC
-        """, (user_id,))
-        chats = cursor.fetchall()
-        
-        # تحويل الرسائل من JSON إلى قائمة
-        for chat in chats:
-            if chat['messages'] and chat['messages'][0] is not None:
-                chat['messages'] = chat['messages']
-            else:
-                chat['messages'] = []
-                
-        return jsonify(chats)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
-
-@app.route("/api/chats", methods=["POST"])
-def save_chat():
+@app.route("/signup", methods=["POST"])
+def signup():
     data = request.json
-    chat_id = data.get("id")
-    title = data.get("title")
-    messages = data.get("messages", [])
-    user_id = data.get("user_id")  # يجب إضافة هذا الحقل في الطلب
-
-    if not user_id:
-        return jsonify({"error": "user_id مطلوب"}), 400
-
-    conn = get_connection()
-    cursor = conn.cursor()
-    
     try:
-        # التحقق مما إذا كانت المحادثة موجودة
-        cursor.execute("SELECT id FROM chats WHERE id = %s", (chat_id,))
-        chat_exists = cursor.fetchone()
-        
-        if chat_exists:
-            # تحديث المحادثة
-            cursor.execute("UPDATE chats SET title = %s WHERE id = %s", (title, chat_id))
-            
-            # حذف الرسائل القديمة
-            cursor.execute("DELETE FROM messages WHERE chat_id = %s", (chat_id,))
-        else:
-            # إنشاء محادثة جديدة
-            cursor.execute("""
-                INSERT INTO chats (id, user_id, title) 
-                VALUES (%s, %s, %s)
-            """, (chat_id, user_id, title))
-        
-        # إضافة الرسائل الجديدة
-        for msg in messages:
-            cursor.execute("""
-                INSERT INTO messages (chat_id, role, content, timestamp)
-                VALUES (%s, %s, %s, %s)
-            """, (chat_id, msg['role'], msg['content'], msg['timestamp']))
-        
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO users (fullname, email, username, password)
+            VALUES (%s, %s, %s, %s)
+        """, (data["fullname"], data["email"], data["username"], hash_password(data["password"])))
         conn.commit()
-        return jsonify({"success": True, "chat_id": chat_id})
-    except Exception as e:
-        conn.rollback()
-        return jsonify({"error": str(e)}), 500
-    finally:
         cursor.close()
         conn.close()
-
-@app.route("/api/chats/<chat_id>", methods=["DELETE"])
-def delete_chat(chat_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("DELETE FROM chats WHERE id = %s", (chat_id,))
-        conn.commit()
         return jsonify({"success": True})
-    except Exception as e:
-        conn.rollback()
-        return jsonify({"error": str(e)}), 500
-    finally:
+    except psycopg2.IntegrityError:
+        return jsonify({"success": False, "error": "اسم المستخدم مستخدم بالفعل"})
+
+@app.route("/login", methods=["POST"])
+def login():
+    data = request.json
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM users WHERE username = %s AND password = %s
+    """, (data["username"], hash_password(data["password"])))
+    result = cursor.fetchone()
+
+    if result:
+        if result["permanently_banned"]:
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": "تم حظر الحساب بشكل دائم"})
+
+        if result["banned_until"]:
+            try:
+                banned_until = datetime.strptime(result["banned_until"], "%Y-%m-%d %H:%M:%S")
+                if banned_until > datetime.now():
+                    cursor.close()
+                    conn.close()
+                    return jsonify({"success": False, "error": "الحساب محظور مؤقتًا حتى " + result["banned_until"]})
+            except:
+                pass
+
+        cursor.execute("""
+            UPDATE users SET last_login = %s WHERE id = %s
+        """, (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), result["id"]))
+        conn.commit()
         cursor.close()
         conn.close()
+        return jsonify({"success": True})
+    else:
+        cursor.close()
+        conn.close()
+        return jsonify({"success": False, "error": "بيانات الدخول غير صحيحة"})
 
-# بقية نقاط النهاية كما هي بدون تغيير...
+@app.route("/users", methods=["GET"])
+def get_users():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users")
+    users = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return jsonify(users)
+
+@app.route("/users/<int:user_id>", methods=["GET", "PUT", "DELETE"])
+def user_operations(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    if request.method == "GET":
+        cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        if row:
+            return jsonify(row)
+        else:
+            return jsonify({"error": "المستخدم غير موجود"}), 404
+
+    elif request.method == "PUT":
+        data = request.json
+        cursor.execute("""
+            UPDATE users
+            SET fullname = %s, email = %s, username = %s, banned_until = %s, permanently_banned = %s
+            WHERE id = %s
+        """, (
+            data.get("fullname"),
+            data.get("email"),
+            data.get("username"),
+            data.get("banned_until"),
+            data.get("permanently_banned", 0),
+            user_id
+        ))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return jsonify({"success": True})
+
+    elif request.method == "DELETE":
+        cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return jsonify({"success": True})
 
 if __name__ == "__main__":
     init_db()
