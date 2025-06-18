@@ -32,7 +32,8 @@ def init_db():
             last_login TEXT,
             banned_until TEXT,
             permanently_banned INTEGER DEFAULT 0,
-            is_admin BOOLEAN DEFAULT FALSE
+            is_admin BOOLEAN DEFAULT FALSE,
+            profile_image TEXT
         )
     """)
     
@@ -47,7 +48,6 @@ def init_db():
         )
     """)
     
-    # جدول محادثات الدعم الفني
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS support_chats (
             id SERIAL PRIMARY KEY,
@@ -57,7 +57,6 @@ def init_db():
         )
     """)
 
-    # جدول رسائل الدعم الفني
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS support_messages (
             id SERIAL PRIMARY KEY,
