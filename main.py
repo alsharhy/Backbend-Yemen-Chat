@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify, make_response
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from flask_cors import CORS
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import os
 import uuid
@@ -495,6 +495,62 @@ def add_support_message(chat_id):
     finally:
         cursor.close()
         conn.close()
+
+@app.route("/statistics", methods=["GET"])
+def get_statistics():
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # عدد المستخدمين
+    cursor.execute("SELECT COUNT(*) FROM users")
+    users_count = cursor.fetchone()['count']
+    
+    # عدد الأخبار
+    cursor.execute("SELECT COUNT(*) FROM news")
+    news_count = cursor.fetchone()['count']
+    
+    # أنواع الأخبار المختلفة
+    cursor.execute("SELECT COUNT(DISTINCT type) FROM news")
+    news_types = cursor.fetchone()['count']
+    
+    # المحادثات اليومية
+    today = datetime.now().strftime("%Y-%m-%d")
+    cursor.execute("SELECT COUNT(*) FROM chats WHERE DATE(created_at) = %s", (today,))
+    daily_chats = cursor.fetchone()['count']
+    
+    # توزيع أنواع الأخبار
+    cursor.execute("SELECT type, COUNT(*) as count FROM news GROUP BY type")
+    news_distribution = cursor.fetchall()
+    news_labels = [item['type'] for item in news_distribution]
+    news_values = [item['count'] for item in news_distribution]
+    
+    # نشاط المستخدمين (آخر 7 أيام)
+    days = []
+    active_users = []
+    for i in range(7):
+        date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+        cursor.execute("SELECT COUNT(DISTINCT user_id) FROM chats WHERE DATE(created_at) = %s", (date,))
+        count = cursor.fetchone()['count']
+        days.insert(0, date)
+        active_users.insert(0, count)
+    
+    cursor.close()
+    conn.close()
+    
+    return jsonify({
+        "users_count": users_count,
+        "news_count": news_count,
+        "news_types": news_types,
+        "daily_chats": daily_chats,
+        "news_distribution": {
+            "labels": news_labels,
+            "values": news_values
+        },
+        "user_activity": {
+            "days": days,
+            "values": active_users
+        }
+    })
 
 if __name__ == "__main__":
     init_db()
