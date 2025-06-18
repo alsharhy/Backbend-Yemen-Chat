@@ -11,7 +11,10 @@ app = Flask(__name__)
 CORS(app)
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
-
+cursor.execute("DROP TABLE IF EXISTS support_messages")
+    cursor.execute("DROP TABLE IF EXISTS support_chats")
+    cursor.execute("DROP TABLE IF EXISTS news")
+    cursor.execute("DROP TABLE IF EXISTS users")
 def get_connection():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
