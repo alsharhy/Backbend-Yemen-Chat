@@ -47,6 +47,45 @@ def init_db():
         )
     """)
     
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chats (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id SERIAL PRIMARY KEY,
+            chat_id INTEGER REFERENCES chats(id) ON DELETE CASCADE,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS support_chats (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            status TEXT DEFAULT 'open',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS support_messages (
+            id SERIAL PRIMARY KEY,
+            chat_id INTEGER REFERENCES support_chats(id) ON DELETE CASCADE,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            message TEXT,
+            image_url TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
     # تهيئة حساب المسؤول
     cursor.execute("""
         INSERT INTO users (fullname, email, username, password, is_admin)
@@ -124,7 +163,7 @@ def login():
         "success": True,
         "is_admin": result["is_admin"],
         "user_id": result["id"],
-        "redirect_to": "admin_dashboard" if result["is_admin"] else "user_dashboard"
+        "redirect_to": "admin_panel.html" if result["is_admin"] else "index.html"
     })
 
 @app.route("/users", methods=["GET"])
@@ -276,6 +315,183 @@ def update_profile():
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route("/chats", methods=["GET"])
+def get_user_chats():
+    user_id = request.args.get("user_id")
+    if not user_id:
+        return jsonify({"error": "User ID is required"}), 400
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM chats 
+        WHERE user_id = %s 
+        ORDER BY created_at DESC
+    """, (user_id,))
+    chats = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return jsonify(chats)
+
+@app.route("/chats", methods=["POST"])
+def create_chat():
+    data = request.json
+    user_id = data.get("user_id")
+    title = data.get("title", "محادثة جديدة")
+    
+    if not user_id:
+        return jsonify({"success": False, "error": "User ID is required"}), 400
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO chats (user_id, title)
+            VALUES (%s, %s)
+            RETURNING id
+        """, (user_id, title))
+        chat_id = cursor.fetchone()["id"]
+        conn.commit()
+        return jsonify({"success": True, "chat_id": chat_id})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route("/chats/<int:chat_id>", methods=["DELETE"])
+def delete_chat(chat_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM chats WHERE id = %s", (chat_id,))
+        conn.commit()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route("/chats/<int:chat_id>/messages", methods=["GET"])
+def get_chat_messages(chat_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM messages 
+        WHERE chat_id = %s 
+        ORDER BY timestamp ASC
+    """, (chat_id,))
+    messages = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return jsonify(messages)
+
+@app.route("/chats/<int:chat_id>/messages", methods=["POST"])
+def add_message(chat_id):
+    data = request.json
+    role = data.get("role")
+    content = data.get("content")
+    
+    if not role or not content:
+        return jsonify({"success": False, "error": "Role and content are required"}), 400
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO messages (chat_id, role, content)
+            VALUES (%s, %s, %s)
+        """, (chat_id, role, content))
+        conn.commit()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route("/support-chats", methods=["POST"])
+def create_support_chat():
+    data = request.json
+    user_id = data.get("user_id")
+    
+    if not user_id:
+        return jsonify({"success": False, "error": "User ID is required"}), 400
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO support_chats (user_id)
+            VALUES (%s)
+            RETURNING id
+        """, (user_id,))
+        chat_id = cursor.fetchone()["id"]
+        conn.commit()
+        return jsonify({"success": True, "chat_id": chat_id})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route("/support-chats", methods=["GET"])
+def get_support_chats():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT sc.*, u.fullname, u.username 
+        FROM support_chats sc
+        JOIN users u ON sc.user_id = u.id
+        ORDER BY created_at DESC
+    """)
+    chats = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return jsonify(chats)
+
+@app.route("/support-messages/<int:chat_id>", methods=["GET"])
+def get_support_messages(chat_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT sm.*, u.fullname, u.profile_image
+        FROM support_messages sm
+        JOIN users u ON sm.user_id = u.id
+        WHERE chat_id = %s
+        ORDER BY timestamp ASC
+    """, (chat_id,))
+    messages = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return jsonify(messages)
+
+@app.route("/support-messages/<int:chat_id>", methods=["POST"])
+def add_support_message(chat_id):
+    data = request.json
+    user_id = data.get("user_id")
+    message = data.get("message")
+    image_url = data.get("image_url")
+    
+    if not user_id or (not message and not image_url):
+        return jsonify({"success": False, "error": "Invalid data"}), 400
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO support_messages (chat_id, user_id, message, image_url)
+            VALUES (%s, %s, %s, %s)
+        """, (chat_id, user_id, message, image_url))
+        conn.commit()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
     finally:
         cursor.close()
         conn.close()
