@@ -22,6 +22,7 @@ def init_db():
     conn = get_connection()
     cursor = conn.cursor()
     
+    # إنشاء الجداول الأساسية
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
@@ -32,7 +33,8 @@ def init_db():
             last_login TEXT,
             banned_until TEXT,
             permanently_banned INTEGER DEFAULT 0,
-            is_admin BOOLEAN DEFAULT FALSE
+            is_admin BOOLEAN DEFAULT FALSE,
+            profile_image TEXT
         )
     """)
     
@@ -43,6 +45,27 @@ def init_db():
             content TEXT NOT NULL,
             image_url TEXT,
             status TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # إنشاء جداول الدعم الفني
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS support_chats (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            status TEXT NOT NULL DEFAULT 'open'
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS support_messages (
+            id SERIAL PRIMARY KEY,
+            chat_id INTEGER NOT NULL REFERENCES support_chats(id),
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            message TEXT,
+            image_url TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -156,7 +179,7 @@ def user_operations(user_id):
         data = request.json
         cursor.execute("""
             UPDATE users
-            SET fullname = %s, email = %s, username = %s, banned_until = %s, permanently_banned = %s
+            SET fullname = %s, email = %s, username = %s, banned_until = %s, permanently_banned = %s, profile_image = %s
             WHERE id = %s
         """, (
             data.get("fullname"),
@@ -164,6 +187,7 @@ def user_operations(user_id):
             data.get("username"),
             data.get("banned_until"),
             data.get("permanently_banned", 0),
+            data.get("profile_image"),
             user_id
         ))
         conn.commit()
@@ -268,9 +292,15 @@ def update_profile():
     try:
         cursor.execute("""
             UPDATE users
-            SET fullname = %s, email = %s, username = %s
+            SET fullname = %s, email = %s, username = %s, profile_image = %s
             WHERE id = %s
-        """, (data["fullname"], data["email"], data["username"], user_id))
+        """, (
+            data["fullname"], 
+            data["email"], 
+            data["username"], 
+            data.get("profile_image"), 
+            user_id
+        ))
         
         conn.commit()
         return jsonify({"success": True})
@@ -279,6 +309,103 @@ def update_profile():
     finally:
         cursor.close()
         conn.close()
+
+@app.route("/create-support-chat", methods=["POST"])
+def create_support_chat():
+    data = request.json
+    user_id = data.get("user_id")
+    
+    if not user_id:
+        return jsonify({"success": False, "error": "User ID missing"}), 400
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            INSERT INTO support_chats (user_id)
+            VALUES (%s)
+            RETURNING id
+        """, (user_id,))
+        
+        chat_id = cursor.fetchone()["id"]
+        conn.commit()
+        
+        return jsonify({
+            "success": True,
+            "chat_id": chat_id
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route("/support-chats", methods=["GET"])
+def get_support_chats():
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT sc.*, u.fullname, u.username, u.profile_image
+        FROM support_chats sc
+        JOIN users u ON sc.user_id = u.id
+        ORDER BY sc.created_at DESC
+    """)
+    
+    chats = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return jsonify(chats)
+
+@app.route("/support-messages/<int:chat_id>", methods=["GET", "POST"])
+def support_messages(chat_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    if request.method == "GET":
+        cursor.execute("""
+            SELECT sm.*, u.fullname, u.profile_image
+            FROM support_messages sm
+            JOIN users u ON sm.user_id = u.id
+            WHERE sm.chat_id = %s
+            ORDER BY sm.created_at ASC
+        """, (chat_id,))
+        messages = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return jsonify(messages)
+    
+    elif request.method == "POST":
+        data = request.json
+        cursor.execute("""
+            INSERT INTO support_messages (chat_id, user_id, message, image_url)
+            VALUES (%s, %s, %s, %s)
+        """, (chat_id, data["user_id"], data.get("message"), data.get("image_url")))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return jsonify({"success": True})
+
+@app.route("/upload", methods=["POST"])
+def upload_image():
+    if 'image' not in request.files:
+        return jsonify({"success": False, "error": "No image provided"}), 400
+    
+    file = request.files['image']
+    if file.filename == '':
+        return jsonify({"success": False, "error": "No selected file"}), 400
+    
+    try:
+        filename = f"support_{uuid.uuid4().hex}.jpg"
+        file.save(os.path.join('uploads', filename))
+        
+        return jsonify({
+            "success": True,
+            "image_url": f"https://yemen-chat-version-8.onrender.com/uploads/{filename}"
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == "__main__":
     init_db()
