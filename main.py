@@ -21,7 +21,7 @@ def hash_password(password):
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
-    
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
@@ -47,13 +47,35 @@ def init_db():
         )
     """)
     
-    # تهيئة حساب المسؤول
+    # جدول محادثات الدعم الفني
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS support_chats (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            status TEXT DEFAULT 'open'
+        )
+    """)
+
+    # جدول رسائل الدعم الفني
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS support_messages (
+            id SERIAL PRIMARY KEY,
+            chat_id INTEGER NOT NULL REFERENCES support_chats(id),
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            message TEXT NOT NULL,
+            image_url TEXT,
+            is_admin BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     cursor.execute("""
         INSERT INTO users (fullname, email, username, password, is_admin)
         VALUES (%s, %s, %s, %s, %s)
         ON CONFLICT (username) DO NOTHING
     """, ("Admin User", "admin@example.com", "admin", hash_password("1234"), True))
-    
+
     conn.commit()
     cursor.close()
     conn.close()
@@ -271,7 +293,6 @@ def update_profile():
             SET fullname = %s, email = %s, username = %s
             WHERE id = %s
         """, (data["fullname"], data["email"], data["username"], user_id))
-        
         conn.commit()
         return jsonify({"success": True})
     except Exception as e:
@@ -279,6 +300,65 @@ def update_profile():
     finally:
         cursor.close()
         conn.close()
+
+@app.route("/support-chats", methods=["GET", "POST"])
+def support_chats():
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    if request.method == "POST":
+        data = request.json
+        user_id = data.get("user_id")
+        
+        cursor.execute("""
+            INSERT INTO support_chats (user_id)
+            VALUES (%s)
+            RETURNING id
+        """, (user_id,))
+        chat_id = cursor.fetchone()["id"]
+        conn.commit()
+        return jsonify({"success": True, "chat_id": chat_id})
+    
+    elif request.method == "GET":
+        cursor.execute("""
+            SELECT sc.id, sc.created_at, sc.status,
+                   u.id as user_id, u.fullname, u.username, u.profile_image
+            FROM support_chats sc
+            JOIN users u ON sc.user_id = u.id
+            ORDER BY sc.created_at DESC
+        """)
+        chats = cursor.fetchall()
+        return jsonify(chats)
+
+@app.route("/support-messages/<int:chat_id>", methods=["GET", "POST"])
+def support_messages(chat_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    if request.method == "GET":
+        cursor.execute("""
+            SELECT sm.*, u.fullname, u.profile_image
+            FROM support_messages sm
+            JOIN users u ON sm.user_id = u.id
+            WHERE chat_id = %s
+            ORDER BY sm.created_at ASC
+        """, (chat_id,))
+        messages = cursor.fetchall()
+        return jsonify(messages)
+    
+    elif request.method == "POST":
+        data = request.json
+        user_id = data.get("user_id")
+        message = data.get("message")
+        image_url = data.get("image_url", None)
+        is_admin = data.get("is_admin", False)
+        
+        cursor.execute("""
+            INSERT INTO support_messages (chat_id, user_id, message, image_url, is_admin)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (chat_id, user_id, message, image_url, is_admin))
+        conn.commit()
+        return jsonify({"success": True})
 
 if __name__ == "__main__":
     init_db()
