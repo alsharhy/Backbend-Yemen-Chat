@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify, make_response
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from flask_cors import CORS
-from datetime import datetime, timedelta
+from datetime import datetime
 import hashlib
 import os
 import uuid
@@ -32,7 +32,8 @@ def init_db():
             last_login TEXT,
             banned_until TEXT,
             permanently_banned INTEGER DEFAULT 0,
-            is_admin BOOLEAN DEFAULT FALSE
+            is_admin BOOLEAN DEFAULT FALSE,
+            profile_image TEXT
         )
     """)
     
@@ -47,51 +48,12 @@ def init_db():
         )
     """)
     
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS chats (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-            title TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id SERIAL PRIMARY KEY,
-            chat_id INTEGER REFERENCES chats(id) ON DELETE CASCADE,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS support_chats (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-            status TEXT DEFAULT 'open',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS support_messages (
-            id SERIAL PRIMARY KEY,
-            chat_id INTEGER REFERENCES support_chats(id) ON DELETE CASCADE,
-            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-            message TEXT,
-            image_url TEXT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
     # تهيئة حساب المسؤول
     cursor.execute("""
-        INSERT INTO users (fullname, email, username, password, is_admin)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO users (fullname, email, username, password, is_admin, profile_image)
+        VALUES (%s, %s, %s, %s, %s, %s)
         ON CONFLICT (username) DO NOTHING
-    """, ("Admin User", "admin@example.com", "admin", hash_password("1234"), True))
+    """, ("Admin User", "admin@example.com", "admin", hash_password("1234"), True, "https://ui-avatars.com/api/?name=Admin+User&background=3498db&color=fff"))
     
     conn.commit()
     cursor.close()
@@ -104,16 +66,30 @@ def signup():
     try:
         conn = get_connection()
         cursor = conn.cursor()
+        
+        # التحقق من عدم وجود نفس اسم المستخدم أو البريد الإلكتروني
+        cursor.execute("SELECT * FROM users WHERE username = %s OR email = %s", 
+                      (data["username"], data["email"]))
+        existing_user = cursor.fetchone()
+        
+        if existing_user:
+            if existing_user["username"] == data["username"]:
+                return jsonify({"success": False, "error": "اسم المستخدم مستخدم بالفعل"})
+            else:
+                return jsonify({"success": False, "error": "البريد الإلكتروني مستخدم بالفعل"})
+        
         cursor.execute("""
-            INSERT INTO users (fullname, email, username, password)
-            VALUES (%s, %s, %s, %s)
-        """, (data["fullname"], data["email"], data["username"], hash_password(data["password"])))
+            INSERT INTO users (fullname, email, username, password, profile_image)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (data["fullname"], data["email"], data["username"], 
+              hash_password(data["password"]),
+              f"https://ui-avatars.com/api/?name={data['fullname']}&background=3498db&color=fff"))
         conn.commit()
         cursor.close()
         conn.close()
         return jsonify({"success": True})
-    except psycopg2.IntegrityError:
-        return jsonify({"success": False, "error": "اسم المستخدم مستخدم بالفعل"})
+    except psycopg2.IntegrityError as e:
+        return jsonify({"success": False, "error": "خطأ في إنشاء الحساب: " + str(e)})
 
 @app.route("/login", methods=["POST"])
 def login():
@@ -163,7 +139,11 @@ def login():
         "success": True,
         "is_admin": result["is_admin"],
         "user_id": result["id"],
-        "redirect_to": "admin_panel.html" if result["is_admin"] else "index.html"
+        "fullname": result["fullname"],
+        "username": result["username"],
+        "email": result["email"],
+        "profile_image": result["profile_image"],
+        "redirect_to": "admin_dashboard" if result["is_admin"] else "user_dashboard"
     })
 
 @app.route("/users", methods=["GET"])
@@ -305,252 +285,70 @@ def update_profile():
     cursor = conn.cursor()
     
     try:
+        # التحقق من عدم وجود نفس اسم المستخدم أو البريد الإلكتروني
+        cursor.execute("""
+            SELECT * FROM users 
+            WHERE (username = %s OR email = %s) 
+            AND id != %s
+        """, (data["username"], data["email"], user_id))
+        
+        existing_user = cursor.fetchone()
+        
+        if existing_user:
+            if existing_user["username"] == data["username"]:
+                return jsonify({"success": False, "error": "اسم المستخدم مستخدم بالفعل"})
+            else:
+                return jsonify({"success": False, "error": "البريد الإلكتروني مستخدم بالفعل"})
+        
+        # تحديث بيانات المستخدم
         cursor.execute("""
             UPDATE users
-            SET fullname = %s, email = %s, username = %s
+            SET fullname = %s, email = %s, username = %s, profile_image = %s
             WHERE id = %s
-        """, (data["fullname"], data["email"], data["username"], user_id))
+        """, (
+            data["fullname"],
+            data["email"],
+            data["username"],
+            data["profile_image"],
+            user_id
+        ))
         
         conn.commit()
-        return jsonify({"success": True})
+        return jsonify({
+            "success": True,
+            "fullname": data["fullname"],
+            "username": data["username"],
+            "email": data["email"],
+            "profile_image": data["profile_image"]
+        })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
     finally:
         cursor.close()
         conn.close()
 
-@app.route("/chats", methods=["GET"])
-def get_user_chats():
-    user_id = request.args.get("user_id")
-    if not user_id:
-        return jsonify({"error": "User ID is required"}), 400
-    
+@app.route("/user/<int:user_id>", methods=["GET"])
+def get_user_profile(user_id):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT * FROM chats 
-        WHERE user_id = %s 
-        ORDER BY created_at DESC
-    """, (user_id,))
-    chats = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return jsonify(chats)
-
-@app.route("/chats", methods=["POST"])
-def create_chat():
-    data = request.json
-    user_id = data.get("user_id")
-    title = data.get("title", "محادثة جديدة")
     
-    if not user_id:
-        return jsonify({"success": False, "error": "User ID is required"}), 400
-    
-    conn = get_connection()
-    cursor = conn.cursor()
     try:
         cursor.execute("""
-            INSERT INTO chats (user_id, title)
-            VALUES (%s, %s)
-            RETURNING id
-        """, (user_id, title))
-        chat_id = cursor.fetchone()["id"]
-        conn.commit()
-        return jsonify({"success": True, "chat_id": chat_id})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
-
-@app.route("/chats/<int:chat_id>", methods=["DELETE"])
-def delete_chat(chat_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("DELETE FROM chats WHERE id = %s", (chat_id,))
-        conn.commit()
-        return jsonify({"success": True})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
-
-@app.route("/chats/<int:chat_id>/messages", methods=["GET"])
-def get_chat_messages(chat_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT * FROM messages 
-        WHERE chat_id = %s 
-        ORDER BY timestamp ASC
-    """, (chat_id,))
-    messages = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return jsonify(messages)
-
-@app.route("/chats/<int:chat_id>/messages", methods=["POST"])
-def add_message(chat_id):
-    data = request.json
-    role = data.get("role")
-    content = data.get("content")
-    
-    if not role or not content:
-        return jsonify({"success": False, "error": "Role and content are required"}), 400
-    
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO messages (chat_id, role, content)
-            VALUES (%s, %s, %s)
-        """, (chat_id, role, content))
-        conn.commit()
-        return jsonify({"success": True})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
-
-@app.route("/support-chats", methods=["POST"])
-def create_support_chat():
-    data = request.json
-    user_id = data.get("user_id")
-    
-    if not user_id:
-        return jsonify({"success": False, "error": "User ID is required"}), 400
-    
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO support_chats (user_id)
-            VALUES (%s)
-            RETURNING id
+            SELECT id, fullname, username, email, profile_image, is_admin
+            FROM users 
+            WHERE id = %s
         """, (user_id,))
-        chat_id = cursor.fetchone()["id"]
-        conn.commit()
-        return jsonify({"success": True, "chat_id": chat_id})
+        
+        user = cursor.fetchone()
+        if not user:
+            return jsonify({"error": "المستخدم غير موجود"}), 404
+        
+        return jsonify(user)
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"error": str(e)}), 500
     finally:
         cursor.close()
         conn.close()
-
-@app.route("/support-chats", methods=["GET"])
-def get_support_chats():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT sc.*, u.fullname, u.username 
-        FROM support_chats sc
-        JOIN users u ON sc.user_id = u.id
-        ORDER BY created_at DESC
-    """)
-    chats = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return jsonify(chats)
-
-@app.route("/support-messages/<int:chat_id>", methods=["GET"])
-def get_support_messages(chat_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT sm.*, u.fullname, u.profile_image
-        FROM support_messages sm
-        JOIN users u ON sm.user_id = u.id
-        WHERE chat_id = %s
-        ORDER BY timestamp ASC
-    """, (chat_id,))
-    messages = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return jsonify(messages)
-
-@app.route("/support-messages/<int:chat_id>", methods=["POST"])
-def add_support_message(chat_id):
-    data = request.json
-    user_id = data.get("user_id")
-    message = data.get("message")
-    image_url = data.get("image_url")
-    
-    if not user_id or (not message and not image_url):
-        return jsonify({"success": False, "error": "Invalid data"}), 400
-    
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO support_messages (chat_id, user_id, message, image_url)
-            VALUES (%s, %s, %s, %s)
-        """, (chat_id, user_id, message, image_url))
-        conn.commit()
-        return jsonify({"success": True})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
-
-@app.route("/statistics", methods=["GET"])
-def get_statistics():
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    # عدد المستخدمين
-    cursor.execute("SELECT COUNT(*) FROM users")
-    users_count = cursor.fetchone()['count']
-    
-    # عدد الأخبار
-    cursor.execute("SELECT COUNT(*) FROM news")
-    news_count = cursor.fetchone()['count']
-    
-    # أنواع الأخبار المختلفة
-    cursor.execute("SELECT COUNT(DISTINCT type) FROM news")
-    news_types = cursor.fetchone()['count']
-    
-    # المحادثات اليومية
-    today = datetime.now().strftime("%Y-%m-%d")
-    cursor.execute("SELECT COUNT(*) FROM chats WHERE DATE(created_at) = %s", (today,))
-    daily_chats = cursor.fetchone()['count']
-    
-    # توزيع أنواع الأخبار
-    cursor.execute("SELECT type, COUNT(*) as count FROM news GROUP BY type")
-    news_distribution = cursor.fetchall()
-    news_labels = [item['type'] for item in news_distribution]
-    news_values = [item['count'] for item in news_distribution]
-    
-    # نشاط المستخدمين (آخر 7 أيام)
-    days = []
-    active_users = []
-    for i in range(7):
-        date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
-        cursor.execute("SELECT COUNT(DISTINCT user_id) FROM chats WHERE DATE(created_at) = %s", (date,))
-        count = cursor.fetchone()['count']
-        days.insert(0, date)
-        active_users.insert(0, count)
-    
-    cursor.close()
-    conn.close()
-    
-    return jsonify({
-        "users_count": users_count,
-        "news_count": news_count,
-        "news_types": news_types,
-        "daily_chats": daily_chats,
-        "news_distribution": {
-            "labels": news_labels,
-            "values": news_values
-        },
-        "user_activity": {
-            "days": days,
-            "values": active_users
-        }
-    })
 
 if __name__ == "__main__":
     init_db()
