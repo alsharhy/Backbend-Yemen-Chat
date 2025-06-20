@@ -626,41 +626,6 @@ def update_api_key():
         cursor.close()
         conn.close()
 
-@app.route("/settings/api", methods=["POST"])
-@admin_required
-def update_api_key():
-    data = request.json
-    if not data.get("api_key"):
-        return jsonify({"success": False, "error": "مطلوب مفتاح API"})
-    
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    try:
-        # Update site settings with new API key
-        cursor.execute("""
-            UPDATE site_settings SET
-            api_key = %s
-            WHERE id = 1
-        """, (data["api_key"],))
-        
-        # Update API key for all users
-        cursor.execute("""
-            UPDATE users SET
-            api_key = %s
-        """, (data["api_key"],))
-        
-        conn.commit()
-        return jsonify({
-            "success": True,
-            "message": "تم تحديث مفتاح API بنجاح لجميع المستخدمين"
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
-    finally:
-        cursor.close()
-        conn.close()
-
 @app.route("/statistics", methods=["GET"])
 @admin_required
 def get_statistics():
