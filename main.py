@@ -15,7 +15,7 @@ CORS(app)
 # Load configuration from environment variables
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SECRET_KEY = os.environ.get("SECRET_KEY", "your-secret-key-here")
-API_KEY = os.environ.get("DEFAULT_API_KEY", "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")
+API_KEY = os.environ.get("postgresql://postgres.kzomaxrofsvjjtsapbah:alsharhy@aws-0-eu-north-1.pooler.supabase.com:6543/postgres")
 
 def get_connection():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
@@ -591,40 +591,6 @@ def site_settings():
             "settings": updated_settings
         })
 
-@app.route("/settings/api", methods=["POST"])
-@admin_required
-def update_api_key():
-    data = request.json
-    if not data.get("api_key"):
-        return jsonify({"success": False, "error": "مطلوب مفتاح API"})
-    
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    try:
-        # Update site settings with new API key
-        cursor.execute("""
-            UPDATE site_settings SET
-            api_key = %s
-            WHERE id = 1
-        """, (data["api_key"],))
-        
-        # Update API key for all users
-        cursor.execute("""
-            UPDATE users SET
-            api_key = %s
-        """, (data["api_key"],))
-        
-        conn.commit()
-        return jsonify({
-            "success": True,
-            "message": "تم تحديث مفتاح API بنجاح لجميع المستخدمين"
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
-    finally:
-        cursor.close()
-        conn.close()
 
 @app.route("/settings/api", methods=["POST"])
 @admin_required
