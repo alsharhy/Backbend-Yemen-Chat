@@ -69,14 +69,24 @@ def init_db():
         )
     """)
     
-    # Create chat messages table
+    # Create user_chats table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_chats (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Create chat_messages table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS chat_messages (
             id SERIAL PRIMARY KEY,
-            user_id INTEGER REFERENCES users(id),
+            chat_id INTEGER REFERENCES user_chats(id) ON DELETE CASCADE,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
             role TEXT NOT NULL,
             content TEXT NOT NULL,
-            response_time FLOAT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -100,27 +110,6 @@ def init_db():
             message TEXT,
             image_url TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # Create chats table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS chats (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER REFERENCES users(id),
-            title TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # Create messages table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id SERIAL PRIMARY KEY,
-            chat_id INTEGER REFERENCES chats(id),
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     
@@ -445,64 +434,42 @@ def update_profile():
     cursor = conn.cursor()
     
     try:
-        # التحقق من البريد الإلكتروني واسم المستخدم
+        # Check if username or email already exists
         cursor.execute("""
             SELECT * FROM users 
             WHERE (username = %s OR email = %s) 
             AND id != %s
-        """, (data.get("username", ""), data.get("email", ""), user_id))
+        """, (data["username"], data["email"], user_id))
         
         existing_user = cursor.fetchone()
         
         if existing_user:
-            if existing_user["username"] == data.get("username", ""):
+            if existing_user["username"] == data["username"]:
                 return jsonify({"success": False, "error": "اسم المستخدم مستخدم بالفعل"})
-            elif existing_user["email"] == data.get("email", ""):
+            else:
                 return jsonify({"success": False, "error": "البريد الإلكتروني مستخدم بالفعل"})
         
-        # تحديث الحقول التي تم إرسالها فقط
-        update_fields = []
-        update_values = []
-        
-        if "fullname" in data:
-            update_fields.append("fullname = %s")
-            update_values.append(data["fullname"])
-        if "email" in data:
-            update_fields.append("email = %s")
-            update_values.append(data["email"])
-        if "username" in data:
-            update_fields.append("username = %s")
-            update_values.append(data["username"])
-        if "profile_image" in data:
-            update_fields.append("profile_image = %s")
-            update_values.append(data["profile_image"])
-        
-        # إذا لم يتم إرسال أي حقل للتحديث
-        if not update_fields:
-            return jsonify({"success": False, "error": "لم يتم تقديم بيانات للتحديث"})
-        
-        update_values.append(user_id)
-        
-        query = """
+        # Update user profile
+        cursor.execute("""
             UPDATE users
-            SET {}
+            SET fullname = %s, email = %s, username = %s, profile_image = %s
             WHERE id = %s
-        """.format(", ".join(update_fields))
+        """, (
+            data["fullname"],
+            data["email"],
+            data["username"],
+            data["profile_image"],
+            user_id
+        ))
         
-        cursor.execute(query, tuple(update_values))
         conn.commit()
-        
-        # جلب بيانات المستخدم المحدثة
-        cursor.execute("SELECT fullname, username, email, profile_image FROM users WHERE id = %s", (user_id,))
-        updated_user = cursor.fetchone()
-        
         return jsonify({
             "success": True,
             "message": "تم تحديث الملف الشخصي بنجاح",
-            "fullname": updated_user["fullname"],
-            "username": updated_user["username"],
-            "email": updated_user["email"],
-            "profile_image": updated_user["profile_image"]
+            "fullname": data["fullname"],
+            "username": data["username"],
+            "email": data["email"],
+            "profile_image": data["profile_image"]
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
@@ -810,159 +777,107 @@ def add_support_message(chat_id):
         cursor.close()
         conn.close()
 
-# APIs for chats and messages
+# API for user chats
 @app.route("/api/chats", methods=["GET"])
 def get_user_chats():
-    token = request.headers.get('Authorization')
-    if not token:
-        return jsonify({"error": "Token missing"}), 401
-    try:
-        data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-        user_id = data['user_id']
-    except:
-        return jsonify({"error": "Invalid token"}), 401
-
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, title 
-        FROM chats 
-        WHERE user_id = %s
-        ORDER BY created_at DESC
-    """, (user_id,))
-    chats = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return jsonify(chats)
-
-@app.route("/api/chats", methods=["POST"])
-def create_chat():
-    token = request.headers.get('Authorization')
-    if not token:
-        return jsonify({"error": "Token missing"}), 401
-    try:
-        data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-        user_id = data['user_id']
-    except:
-        return jsonify({"error": "Invalid token"}), 401
-
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO chats (user_id, title)
-        VALUES (%s, %s)
-        RETURNING id
-    """, (user_id, "محادثة جديدة"))
-    chat_id = cursor.fetchone()["id"]
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return jsonify({"success": True, "chat_id": chat_id})
-
-@app.route("/api/chats/<int:chat_id>/messages", methods=["GET"])
-def get_chat_messages(chat_id):
-    token = request.headers.get('Authorization')
-    if not token:
-        return jsonify({"error": "Token missing"}), 401
-    
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT role, content, timestamp
-        FROM messages
-        WHERE chat_id = %s
-        ORDER BY timestamp ASC
-    """, (chat_id,))
-    messages = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return jsonify(messages)
-
-@app.route("/api/messages", methods=["POST"])
-def save_message():
-    token = request.headers.get('Authorization')
-    if not token:
-        return jsonify({"error": "Token missing"}), 401
-    
-    data = request.json
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO messages (chat_id, role, content)
-        VALUES (%s, %s, %s)
-    """, (
-        data["chat_id"],
-        data["role"],
-        data["content"]
-    ))
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return jsonify({"success": True})
-
-@app.route("/api/delete-chat", methods=["POST"])
-def delete_chat():
-    data = request.json
-    chat_id = data.get("chat_id")
-    
-    if not chat_id:
-        return jsonify({"success": False, "error": "Chat ID missing"}), 400
-    
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    try:
-        # حذف الرسائل المرتبطة بالدردشة أولاً
-        cursor.execute("DELETE FROM messages WHERE chat_id = %s", (chat_id,))
+    user_id = request.args.get("user_id")
+    if not user_id:
+        return jsonify({"error": "User ID missing"}), 400
         
-        # ثم حذف الدردشة نفسها
-        cursor.execute("DELETE FROM chats WHERE id = %s", (chat_id,))
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT id, title, created_at 
+            FROM user_chats 
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+        """, (user_id,))
         
-        conn.commit()
-        return jsonify({"success": True, "message": "تم حذف الدردشة بنجاح"})
+        chats = cursor.fetchall()
+        return jsonify(chats)
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+        return jsonify({"error": str(e)}), 500
     finally:
         cursor.close()
         conn.close()
-        
-@app.route("/api/save-chat", methods=["POST"])
-def save_chat():
+
+@app.route("/api/chats", methods=["POST"])
+def create_chat():
     data = request.json
     user_id = data.get("user_id")
-    chat_id = data.get("chat_id")
-    title = data.get("title")
-    messages = data.get("messages", [])
+    title = data.get("title", "محادثة جديدة")
     
-    if not user_id or not chat_id or not title:
-        return jsonify({"success": False, "error": "Missing required fields"}), 400
-    
+    if not user_id:
+        return jsonify({"error": "User ID missing"}), 400
+        
     conn = get_connection()
     cursor = conn.cursor()
     
     try:
-        # حفظ أو تحديث الدردشة
         cursor.execute("""
-            INSERT INTO chats (id, user_id, title)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (id) DO UPDATE 
-            SET title = EXCLUDED.title
-        """, (chat_id, user_id, title))
+            INSERT INTO user_chats (user_id, title)
+            VALUES (%s, %s)
+            RETURNING id
+        """, (user_id, title))
         
-        # حذف الرسائل القديمة
-        cursor.execute("DELETE FROM messages WHERE chat_id = %s", (chat_id,))
+        new_chat = cursor.fetchone()
+        conn.commit()
+        return jsonify({
+            "success": True,
+            "chat_id": new_chat["id"]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route("/api/chats/<int:chat_id>", methods=["GET"])
+def get_chat_messages(chat_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT role, content, created_at
+            FROM chat_messages
+            WHERE chat_id = %s
+            ORDER BY created_at ASC
+        """, (chat_id,))
         
-        # إضافة الرسائل الجديدة
-        for msg in messages:
-            cursor.execute("""
-                INSERT INTO messages (chat_id, role, content)
-                VALUES (%s, %s, %s)
-            """, (chat_id, msg["role"], msg["content"]))
+        messages = cursor.fetchall()
+        return jsonify(messages)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route("/api/chats/<int:chat_id>/messages", methods=["POST"])
+def save_message(chat_id):
+    data = request.json
+    user_id = data.get("user_id")
+    role = data.get("role")
+    content = data.get("content")
+    
+    if not user_id or not role or not content:
+        return jsonify({"error": "Missing required data"}), 400
+        
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            INSERT INTO chat_messages (chat_id, user_id, role, content)
+            VALUES (%s, %s, %s, %s)
+        """, (chat_id, user_id, role, content))
         
         conn.commit()
-        return jsonify({"success": True, "message": "تم حفظ الدردشة بنجاح"})
+        return jsonify({"success": True})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+        return jsonify({"error": str(e)}), 500
     finally:
         cursor.close()
         conn.close()
