@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, make_response
+from flask import Flask, request, jsonify, make_response, send_from_directory
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from flask_cors import CORS
@@ -16,6 +16,16 @@ CORS(app)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SECRET_KEY = os.environ.get("SECRET_KEY", "your-secret-key-here")
 API_KEY = os.environ.get("DEFAULT_API_KEY", "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")
+UPLOAD_FOLDER = 'uploads'
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+
+# Ensure upload folder exists
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def get_connection():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
@@ -69,24 +79,14 @@ def init_db():
         )
     """)
     
-    # Create user_chats table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS user_chats (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-            title TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # Create chat_messages table
+    # Create chat messages table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS chat_messages (
             id SERIAL PRIMARY KEY,
-            chat_id INTEGER REFERENCES user_chats(id) ON DELETE CASCADE,
-            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            user_id INTEGER REFERENCES users(id),
             role TEXT NOT NULL,
             content TEXT NOT NULL,
+            response_time FLOAT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -424,8 +424,25 @@ def single_news_operations(news_id):
 
 @app.route("/update-profile", methods=["POST"])
 def update_profile():
-    data = request.json
-    user_id = data.get("user_id")
+    # Handle file upload
+    if 'profile_image' in request.files:
+        file = request.files['profile_image']
+        if file.filename != '' and allowed_file(file.filename):
+            filename = f"{uuid.uuid4().hex}.{file.filename.rsplit('.', 1)[1].lower()}"
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(file_path)
+            profile_image = f"/uploads/{filename}"
+        else:
+            return jsonify({"success": False, "error": "صيغة الملف غير مسموح بها"})
+    else:
+        profile_image = request.form.get('profile_image') or None
+
+    # Get form data
+    user_id = request.form.get('user_id')
+    fullname = request.form.get('fullname')
+    email = request.form.get('email')
+    username = request.form.get('username')
+    api_key = request.form.get('api_key')
     
     if not user_id:
         return jsonify({"success": False, "error": "User ID missing"}), 400
@@ -439,43 +456,63 @@ def update_profile():
             SELECT * FROM users 
             WHERE (username = %s OR email = %s) 
             AND id != %s
-        """, (data["username"], data["email"], user_id))
+        """, (username, email, user_id))
         
         existing_user = cursor.fetchone()
         
         if existing_user:
-            if existing_user["username"] == data["username"]:
+            if existing_user["username"] == username:
                 return jsonify({"success": False, "error": "اسم المستخدم مستخدم بالفعل"})
             else:
                 return jsonify({"success": False, "error": "البريد الإلكتروني مستخدم بالفعل"})
         
         # Update user profile
-        cursor.execute("""
+        update_query = """
             UPDATE users
-            SET fullname = %s, email = %s, username = %s, profile_image = %s
-            WHERE id = %s
-        """, (
-            data["fullname"],
-            data["email"],
-            data["username"],
-            data["profile_image"],
-            user_id
-        ))
+            SET fullname = %s, email = %s, username = %s
+        """
+        params = [fullname, email, username]
         
+        if profile_image:
+            update_query += ", profile_image = %s"
+            params.append(profile_image)
+            
+        if api_key:
+            update_query += ", api_key = %s"
+            params.append(api_key)
+            
+        update_query += " WHERE id = %s"
+        params.append(user_id)
+        
+        cursor.execute(update_query, tuple(params))
         conn.commit()
+        
+        # Get updated user data
+        cursor.execute("""
+            SELECT fullname, username, email, profile_image, api_key
+            FROM users 
+            WHERE id = %s
+        """, (user_id,))
+        updated_user = cursor.fetchone()
+        
         return jsonify({
             "success": True,
             "message": "تم تحديث الملف الشخصي بنجاح",
-            "fullname": data["fullname"],
-            "username": data["username"],
-            "email": data["email"],
-            "profile_image": data["profile_image"]
+            "fullname": updated_user["fullname"],
+            "username": updated_user["username"],
+            "email": updated_user["email"],
+            "profile_image": updated_user["profile_image"],
+            "api_key": updated_user["api_key"]
         })
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+        return jsonify({"success": False, "error": str(e)}), 500
     finally:
         cursor.close()
         conn.close()
+
+@app.route("/uploads/<filename>")
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 @app.route("/user/<int:user_id>", methods=["GET"])
 def get_user_profile(user_id):
@@ -773,111 +810,6 @@ def add_support_message(chat_id):
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
-    finally:
-        cursor.close()
-        conn.close()
-
-# API for user chats
-@app.route("/api/chats", methods=["GET"])
-def get_user_chats():
-    user_id = request.args.get("user_id")
-    if not user_id:
-        return jsonify({"error": "User ID missing"}), 400
-        
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("""
-            SELECT id, title, created_at 
-            FROM user_chats 
-            WHERE user_id = %s
-            ORDER BY created_at DESC
-        """, (user_id,))
-        
-        chats = cursor.fetchall()
-        return jsonify(chats)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
-
-@app.route("/api/chats", methods=["POST"])
-def create_chat():
-    data = request.json
-    user_id = data.get("user_id")
-    title = data.get("title", "محادثة جديدة")
-    
-    if not user_id:
-        return jsonify({"error": "User ID missing"}), 400
-        
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("""
-            INSERT INTO user_chats (user_id, title)
-            VALUES (%s, %s)
-            RETURNING id
-        """, (user_id, title))
-        
-        new_chat = cursor.fetchone()
-        conn.commit()
-        return jsonify({
-            "success": True,
-            "chat_id": new_chat["id"]
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
-
-@app.route("/api/chats/<int:chat_id>", methods=["GET"])
-def get_chat_messages(chat_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("""
-            SELECT role, content, created_at
-            FROM chat_messages
-            WHERE chat_id = %s
-            ORDER BY created_at ASC
-        """, (chat_id,))
-        
-        messages = cursor.fetchall()
-        return jsonify(messages)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        cursor.close()
-        conn.close()
-
-@app.route("/api/chats/<int:chat_id>/messages", methods=["POST"])
-def save_message(chat_id):
-    data = request.json
-    user_id = data.get("user_id")
-    role = data.get("role")
-    content = data.get("content")
-    
-    if not user_id or not role or not content:
-        return jsonify({"error": "Missing required data"}), 400
-        
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("""
-            INSERT INTO chat_messages (chat_id, user_id, role, content)
-            VALUES (%s, %s, %s, %s)
-        """, (chat_id, user_id, role, content))
-        
-        conn.commit()
-        return jsonify({"success": True})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
     finally:
         cursor.close()
         conn.close()
